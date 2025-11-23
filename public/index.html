@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🤖 Bot WhatsApp - Pairing Code</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Bot WhatsApp</h1>
+            <p>Connexion par code de jumelage</p>
+        </div>
+        
+        <div class="status disconnected" id="status">
+            ❌ Déconnecté
+        </div>
+        
+        <div class="alert" id="alert"></div>
+        
+        <form id="pairingForm">
+            <div class="form-group">
+                <label for="phoneNumber">📱 Numéro WhatsApp</label>
+                <input 
+                    type="tel" 
+                    id="phoneNumber" 
+                    placeholder="212612345678"
+                    pattern="[0-9]{10,15}"
+                    required
+                >
+                <div class="hint">
+                    Format: [code pays][numéro] sans espaces<br>
+                    Exemples: 212612345678 (Maroc), 33612345678 (France)
+                </div>
+            </div>
+            
+            <button type="submit" class="btn" id="submitBtn">
+                🚀 Générer le code
+            </button>
+        </form>
+        
+        <div class="code-display" id="codeDisplay">
+            <h2>📱 Votre code de jumelage</h2>
+            <div class="code" id="code">----</div>
+            <div class="timer" id="timer">⏰ Expire dans 60 secondes</div>
+        </div>
+        
+        <div class="instructions" id="instructions">
+            <h3>📋 Étapes sur WhatsApp</h3>
+            <ol>
+                <li>Ouvrez WhatsApp sur votre téléphone</li>
+                <li>Menu (⋮) → <strong>Appareils connectés</strong></li>
+                <li>Appuyez sur <strong>Connecter un appareil</strong></li>
+                <li>Sélectionnez <strong>Connecter avec numéro de téléphone</strong></li>
+                <li>Entrez le code affiché ci-dessus</li>
+            </ol>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>
