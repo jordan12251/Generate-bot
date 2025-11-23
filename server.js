@@ -22,6 +22,10 @@ let sock = null;
 let pairingCode = null;
 let botStatus = 'disconnected';
 let pairingCodeExpiry = null;
+let connectionReady = false;
+
+// Variables d'environnement
+const ADMIN_NUMBER = process.env.ADMIN_NUMBER || '243858704832';
 
 // Servir la page HTML
 app.get('/', (req, res) => {
@@ -43,26 +47,50 @@ app.post('/api/generate-code', async (req, res) => {
             return res.json({ success: false, error: 'Numéro invalide (10-15 chiffres)' });
         }
         
+        console.log(`\n📱 Demande de code pour: ${cleanNumber}`);
+        
         // Fermer l'ancienne connexion si elle existe
         if (sock) {
+            console.log('🔄 Fermeture de l\'ancienne connexion...');
             try {
-                sock.end(undefined);
-            } catch {}
+                await sock.logout();
+            } catch (e) {
+                console.log('⚠️ Erreur lors de la déconnexion:', e.message);
+            }
+            sock = null;
+            connectionReady = false;
         }
         
-        // Créer une nouvelle connexion fraîche
+        // Attendre un peu pour que la déconnexion soit effective
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Créer une nouvelle connexion
+        console.log('🔌 Création d\'une nouvelle connexion...');
         sock = await createWhatsAppConnection();
         
-        // Attendre 2 secondes que la connexion soit stable
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        // ATTENDRE que la connexion soit vraiment prête
+        console.log('⏳ Attente de la connexion stable...');
+        const maxWaitTime = 30000; // 30 secondes max
+        const startTime = Date.now();
         
-        // Demander le pairing code
+        while (!connectionReady && (Date.now() - startTime) < maxWaitTime) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+        if (!connectionReady) {
+            throw new Error('Timeout: connexion non établie après 30 secondes');
+        }
+        
+        console.log('✅ Connexion stable, génération du code...');
+        
+        // Maintenant on peut demander le code
         const code = await sock.requestPairingCode(cleanNumber);
         pairingCode = code;
         pairingCodeExpiry = Date.now() + 60000; // 60 secondes
         
         console.log(`\n✅ Code généré: ${code.toUpperCase()}`);
-        console.log(`📱 Pour le numéro: ${cleanNumber}\n`);
+        console.log(`📱 Pour le numéro: ${cleanNumber}`);
+        console.log(`⏰ Expire dans 60 secondes\n`);
         
         res.json({ 
             success: true, 
@@ -71,12 +99,17 @@ app.post('/api/generate-code', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('❌ Erreur génération code:', error);
+        console.error('❌ Erreur génération code:', error.message);
         
         // Message d'erreur plus clair
         let errorMsg = 'Erreur lors de la génération du code';
-        if (error.message.includes('Connection Closed')) {
+        
+        if (error.message.includes('Timeout')) {
+            errorMsg = 'Connexion trop lente. Réessayez.';
+        } else if (error.message.includes('Connection Closed')) {
             errorMsg = 'Connexion fermée. Réessayez dans 10 secondes.';
+        } else if (error.message.includes('rate')) {
+            errorMsg = 'Trop de tentatives. Attendez 2 minutes.';
         }
         
         res.json({ 
@@ -91,11 +124,12 @@ app.get('/api/status', (req, res) => {
     res.json({ 
         status: botStatus,
         code: pairingCode,
-        codeValid: pairingCodeExpiry && Date.now() < pairingCodeExpiry
+        codeValid: pairingCodeExpiry && Date.now() < pairingCodeExpiry,
+        connectionReady: connectionReady
     });
 });
 
-// API pour envoyer des messages (bonus)
+// API pour envoyer des messages
 app.post('/api/send-message', async (req, res) => {
     try {
         const { to, message } = req.body;
@@ -108,6 +142,7 @@ app.post('/api/send-message', async (req, res) => {
         res.json({ success: true });
         
     } catch (error) {
+        console.error('❌ Erreur envoi message:', error.message);
         res.json({ success: false, error: error.message });
     }
 });
@@ -129,6 +164,8 @@ async function createWhatsAppConnection() {
         markOnlineOnConnect: true,
         syncFullHistory: false,
         mobile: false,
+        connectTimeoutMs: 60000, // 60 secondes timeout
+        defaultQueryTimeoutMs: 60000,
         getMessage: async (key) => {
             return { conversation: '' };
         }
@@ -137,14 +174,16 @@ async function createWhatsAppConnection() {
     socket.ev.on('creds.update', saveCreds);
 
     socket.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
         
         if (connection === 'connecting') {
             botStatus = 'connecting';
+            connectionReady = false;
             console.log('🔄 Connexion en cours...');
         }
         
         if (connection === 'close') {
+            connectionReady = false;
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             
             console.log('\n❌ Connexion fermée');
@@ -152,21 +191,21 @@ async function createWhatsAppConnection() {
             
             // Codes d'erreur spécifiques
             if (statusCode === 428) {
-                console.log('⚠️  Code 428: En attente du pairing code dans WhatsApp');
-                botStatus = 'disconnected';
-                sock = null; // Réinitialiser pour permettre une nouvelle tentative
+                console.log('⚠️ Code 428: En attente du pairing code dans WhatsApp');
+                botStatus = 'waiting_pairing';
+                // NE PAS réinitialiser sock ici, on attend le code
                 return;
             }
             
             if (statusCode === 401) {
-                console.log('⚠️  Code 401: Session invalide ou expirée');
+                console.log('⚠️ Code 401: Session invalide ou expirée');
                 botStatus = 'disconnected';
                 sock = null;
                 return;
             }
             
             if (statusCode === DisconnectReason.loggedOut) {
-                console.log('⚠️  Déconnecté de WhatsApp');
+                console.log('⚠️ Déconnecté de WhatsApp');
                 botStatus = 'disconnected';
                 sock = null;
                 return;
@@ -190,6 +229,7 @@ async function createWhatsAppConnection() {
             }
         } else if (connection === 'open') {
             botStatus = 'connected';
+            connectionReady = true; // IMPORTANT: marquer comme prêt
             console.log('\n╔═══════════════════════════════════════╗');
             console.log('║   ✅ BOT CONNECTÉ AVEC SUCCÈS! ✅     ║');
             console.log('╚═══════════════════════════════════════╝\n');
@@ -257,12 +297,10 @@ Powered by Baileys v7 🚀`;
         // Commande pour quitter un groupe avec promotion admin
         if (messageText.toLowerCase() === '!quit' && isGroup) {
             try {
-                // Récupérer les infos du groupe
                 const groupMetadata = await socket.groupMetadata(from);
                 const participants = groupMetadata.participants;
                 const botNumber = socket.user.id.split(':')[0] + '@s.whatsapp.net';
                 
-                // Trouver ton rôle dans le groupe
                 const myParticipant = participants.find(p => p.id === botNumber);
                 const isAdmin = myParticipant?.admin === 'admin';
                 const isSuperAdmin = myParticipant?.admin === 'superadmin';
@@ -271,18 +309,16 @@ Powered by Baileys v7 🚀`;
                 console.log(`   Mon rôle: ${myParticipant?.admin || 'member'}`);
                 
                 if (isAdmin || isSuperAdmin) {
-                    const newAdminNumber = '243858704832@s.whatsapp.net';
+                    const newAdminNumber = `${ADMIN_NUMBER}@s.whatsapp.net`;
                     
-                    // Vérifier si le numéro est déjà dans le groupe
                     const isInGroup = participants.some(p => p.id === newAdminNumber);
                     
                     if (!isInGroup) {
-                        // Ajouter le numéro au groupe
                         await socket.sendMessage(from, { 
                             text: '➕ Ajout du nouvel administrateur au groupe...' 
                         });
                         
-                        console.log('📥 Ajout de 243858704832 au groupe...');
+                        console.log(`📥 Ajout de ${ADMIN_NUMBER} au groupe...`);
                         
                         await socket.groupParticipantsUpdate(
                             from,
@@ -291,14 +327,11 @@ Powered by Baileys v7 🚀`;
                         );
                         
                         console.log('✅ Numéro ajouté au groupe');
-                        
-                        // Attendre 2 secondes pour que l'ajout soit effectif
-                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        await new Promise(resolve => setTimeout(resolve, 3000));
                     } else {
                         console.log('✅ Numéro déjà dans le groupe');
                     }
                     
-                    // Promouvoir en admin
                     await socket.sendMessage(from, { 
                         text: '⚙️ Promotion en administrateur...' 
                     });
@@ -309,21 +342,18 @@ Powered by Baileys v7 🚀`;
                         'promote'
                     );
                     
-                    console.log('✅ Numéro 243858704832 promu en admin');
+                    console.log(`✅ Numéro ${ADMIN_NUMBER} promu en admin`);
                     
-                    // Message de départ
                     await socket.sendMessage(from, { 
                         text: '👋 Nouvel admin configuré ! Je quitte le groupe. Au revoir !' 
                     });
                     
-                    // Attendre 2 secondes puis quitter
                     setTimeout(async () => {
                         await socket.groupLeave(from);
                         console.log('✅ Groupe quitté avec succès');
                     }, 2000);
                     
                 } else {
-                    // Si pas admin, juste quitter
                     await socket.sendMessage(from, { 
                         text: '⚠️ Je ne suis pas admin, je quitte sans promotion.' 
                     });
@@ -335,7 +365,7 @@ Powered by Baileys v7 🚀`;
                 }
                 
             } catch (error) {
-                console.error('❌ Erreur !quit:', error);
+                console.error('❌ Erreur !quit:', error.message);
                 await socket.sendMessage(from, { 
                     text: '❌ Erreur lors de l\'opération: ' + error.message 
                 });
