@@ -43,10 +43,18 @@ app.post('/api/generate-code', async (req, res) => {
             return res.json({ success: false, error: 'Numéro invalide (10-15 chiffres)' });
         }
         
-        // Si pas encore de socket, créer la connexion
-        if (!sock) {
-            sock = await createWhatsAppConnection();
+        // Fermer l'ancienne connexion si elle existe
+        if (sock) {
+            try {
+                sock.end(undefined);
+            } catch {}
         }
+        
+        // Créer une nouvelle connexion fraîche
+        sock = await createWhatsAppConnection();
+        
+        // Attendre 2 secondes que la connexion soit stable
+        await new Promise(resolve => setTimeout(resolve, 2000));
         
         // Demander le pairing code
         const code = await sock.requestPairingCode(cleanNumber);
@@ -64,9 +72,16 @@ app.post('/api/generate-code', async (req, res) => {
         
     } catch (error) {
         console.error('❌ Erreur génération code:', error);
+        
+        // Message d'erreur plus clair
+        let errorMsg = 'Erreur lors de la génération du code';
+        if (error.message.includes('Connection Closed')) {
+            errorMsg = 'Connexion fermée. Réessayez dans 10 secondes.';
+        }
+        
         res.json({ 
             success: false, 
-            error: error.message || 'Erreur lors de la génération du code'
+            error: errorMsg
         });
     }
 });
@@ -130,18 +145,48 @@ async function createWhatsAppConnection() {
         }
         
         if (connection === 'close') {
-            botStatus = 'disconnected';
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             
             console.log('\n❌ Connexion fermée');
             console.log(`Code: ${statusCode}`);
             
+            // Codes d'erreur spécifiques
+            if (statusCode === 428) {
+                console.log('⚠️  Code 428: En attente du pairing code dans WhatsApp');
+                botStatus = 'disconnected';
+                sock = null; // Réinitialiser pour permettre une nouvelle tentative
+                return;
+            }
+            
+            if (statusCode === 401) {
+                console.log('⚠️  Code 401: Session invalide ou expirée');
+                botStatus = 'disconnected';
+                sock = null;
+                return;
+            }
+            
+            if (statusCode === DisconnectReason.loggedOut) {
+                console.log('⚠️  Déconnecté de WhatsApp');
+                botStatus = 'disconnected';
+                sock = null;
+                return;
+            }
+            
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            botStatus = 'disconnected';
+            
             if (shouldReconnect) {
                 console.log('🔄 Reconnexion dans 5 secondes...');
                 setTimeout(async () => {
-                    sock = await createWhatsAppConnection();
+                    try {
+                        sock = await createWhatsAppConnection();
+                    } catch (err) {
+                        console.error('❌ Échec reconnexion:', err.message);
+                        sock = null;
+                    }
                 }, 5000);
+            } else {
+                sock = null;
             }
         } else if (connection === 'open') {
             botStatus = 'connected';
