@@ -1,0 +1,27 @@
+{
+  "name": "whatsapp-bot-pairing",
+  "version": "1.0.0",
+  "description": "Bot WhatsApp avec interface web pour pairing code",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "pairing-code"
+  ],
+  "author": "Votre Nom",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.8",
+    "express": "^4.18.2",
+    "pino": "^8.16.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
